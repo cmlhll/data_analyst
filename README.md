@@ -72,6 +72,27 @@ python main.py data/iris.csv --query "分析品种分类特征，训练分类模
 python main.py data/orders.csv --thread-id session-001
 ```
 
+## 离线评测
+
+项目内置 `eval/` 子系统，用于评估“用户上传文件 + 自然语言问题”的数据分析效果。
+
+```bash
+# mock 模式：不调用 LLM，适合 CI 或快速验证评测链路
+python -m eval.run_eval
+
+# 真实 Agent 模式：通过 graph.run_analysis 跑完整 LangGraph 工作流
+python -m eval.run_eval --mode agent
+```
+
+评测会自动生成小型合成数据集，并输出：
+
+```text
+eval/generated_data/      # 自动生成的 CSV 与 cases.json
+eval/results/             # 评测明细与 Markdown 报告
+```
+
+当前覆盖能力：文件读取、数据质量、EDA、异常识别、可视化、建模、执行成功率和报告关键词覆盖。
+
 ## 项目结构
 
 ```
@@ -95,6 +116,7 @@ data_analyst/
 │   ├── __init__.py
 │   ├── code_executor.py    # 代码沙箱（子进程执行 + 超时控制）
 │   └── file_handler.py     # 文件上传/解析/校验
+├── eval/                   # 离线评测集、runner、scorers
 ├── sandbox/                # 代码执行临时目录（自动创建）
 └── figures/                # 图表输出目录（自动创建）
 ```
@@ -105,3 +127,4 @@ data_analyst/
 - **代码沙箱**：LLM 生成 Python 代码 → 子进程执行（超时 60s）→ 捕获 stdout/stderr/图表
 - **可重入**：MemorySaver 检查点支持多轮对话和断点续传
 - **幂等路由**：Supervisor 基于 `analysis_plan` + `completed_steps` 决定下一步，不会重复执行已完成的步骤
+- **离线评测**：`eval/` 通过 mock 模式和真实 Agent 模式评估报告质量、执行轨迹和关键能力覆盖
