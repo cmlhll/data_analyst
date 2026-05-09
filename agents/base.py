@@ -151,13 +151,38 @@ plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 sns.set_style("whitegrid")
 """
-        # 如果有数据文件路径，加载数据
+        # 加载数据：优先从工作副本 (pickle)，fallback 到原始文件
         if state.get("file_path"):
+            sandbox_dir = config.SANDBOX_DIR
             preamble += f"""
-# 加载数据
+import os as _os
 import sys
-sys.path.insert(0, r"{config.SANDBOX_DIR}")
-df = pd.read_csv(r"{state['file_path']}")
-print(f"✅ 数据加载成功: {{df.shape[0]}} 行 × {{df.shape[1]}} 列")
+sys.path.insert(0, r"{sandbox_dir}")
+
+_working = _os.path.join(r"{sandbox_dir}", '_working_data.pkl')
+if _os.path.exists(_working):
+    try:
+        df = pd.read_pickle(_working)
+        print(f"✅ 从工作副本加载: {{df.shape[0]}} 行 × {{df.shape[1]}} 列")
+    except Exception:
+        _os.remove(_working)  # 损坏的 pickle，回退
+        raise
+else:
+    # 首次加载：根据文件扩展名选择读取方式
+    _path = r"{state['file_path']}"
+    _ext = _os.path.splitext(_path)[1].lower()
+    if _ext in ('.xlsx', '.xls'):
+        df = pd.read_excel(_path)
+    elif _ext == '.json':
+        df = pd.read_json(_path)
+    elif _ext == '.parquet':
+        df = pd.read_parquet(_path)
+    elif _ext == '.tsv':
+        df = pd.read_csv(_path, sep='\t')
+    else:
+        df = pd.read_csv(_path)
+    print(f"✅ 首次加载原始数据: {{df.shape[0]}} 行 × {{df.shape[1]}} 列")
+    # 建立工作副本
+    df.to_pickle(_working)
 """
         return preamble.strip()

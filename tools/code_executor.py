@@ -136,6 +136,18 @@ finally:
     _output = _capture.getvalue()
     if _output:
         print(_output, end="")
+
+# ── Inter-Agent Persistence: save modified df ──
+try:
+    _df_maybe = locals().get('df')
+    if _df_maybe is None:
+        _df_maybe = globals().get('df')
+    if _df_maybe is not None:
+        import pandas as _pd_check
+        if isinstance(_df_maybe, _pd_check.DataFrame):
+            _df_maybe.to_pickle('_working_data.pkl')
+except Exception:
+    pass  # best-effort: don't crash the script
 '''
         return wrapper
 
