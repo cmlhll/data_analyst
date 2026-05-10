@@ -1,11 +1,14 @@
 """
 Agent 基类 —— 通用 LLM 调用、代码生成、结果解析模式。
+包含路径遍历防护和统一错误处理。
 """
-
 import json
+import logging
+import os
 import re
-from typing import Optional
+import traceback as _traceback
 from abc import ABC, abstractmethod
+from typing import Any, Optional
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -13,6 +16,24 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import config
 from state import DataAnalysisState
 from tools.code_executor import CodeExecutor
+
+logger = logging.getLogger(__name__)
+
+# 项目根目录，用于路径遍历校验
+_PROJECT_ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), '..'))
+
+
+def _validate_path_safety(file_path: str) -> str:
+    """
+    校验文件路径是否在项目根目录内，防止路径遍历攻击。
+    返回安全的绝对路径，如果越权则抛出 PermissionError。
+    """
+    real = os.path.realpath(file_path)
+    if not real.startswith(_PROJECT_ROOT + os.sep) and real != _PROJECT_ROOT:
+        raise PermissionError(
+            f"路径遍历拒绝: {real} 不在项目根目录 {_PROJECT_ROOT} 内"
+        )
+    return real
 
 
 class BaseAgent(ABC):
@@ -25,13 +46,13 @@ class BaseAgent(ABC):
 
     name: str = "base"
 
-    def __init__(self, llm: Optional[ChatOpenAI] = None):
+    def __init__(self, llm: Optional[ChatOpenAI] = None) -> None:
         self.llm = llm or self._default_llm()
         self.executor = CodeExecutor()
 
     @staticmethod
     def _default_llm() -> ChatOpenAI:
-        kwargs = {
+        kwargs: dict[str, Any] = {
             "model": config.LLM_MODEL,
             "temperature": config.LLM_TEMPERATURE,
             "max_tokens": config.LLM_MAX_TOKENS,
@@ -72,69 +93,85 @@ class BaseAgent(ABC):
             pattern = r"```\s*\n(.*?)```"
             matches = re.findall(pattern, text, re.DOTALL)
         if not matches:
-            # 尝试只匹配缩进的代码（无 markdown 标记）
             # 作为最后手段，返回整个响应
             return [text.strip()]
         return [m.strip() for m in matches]
 
-    def run(self, state: DataAnalysisState) -> dict:
+    def run(self, state: DataAnalysisState) -> dict[str, Any]:
         """
         标准执行流程：
         1. LLM 生成分析代码
         2. 代码沙箱执行
         3. 将结果写回 state
+
+        统一 try/except 包装，异常时返回结构化错误 state。
         """
-        llm_response = self.call_llm(state)
-        code_blocks = self.extract_code_blocks(llm_response)
+        try:
+            logger.info("Agent [%s] 开始执行", self.name)
+            llm_response = self.call_llm(state)
+            code_blocks = self.extract_code_blocks(llm_response)
 
-        # 构建 preamble（共享的导入和数据加载）
-        preamble = self._build_preamble(state)
+            # 构建 preamble（共享的导入和数据加载）
+            preamble = self._build_preamble(state)
 
-        all_outputs = []
-        all_figures = []
-        success = True
+            all_outputs: list[dict] = []
+            all_figures: list[str] = []
+            success = True
 
-        for i, code in enumerate(code_blocks):
-            result = self.executor.execute(code, preamble=preamble)
-            all_outputs.append(result)
-            all_figures.extend(result.get("figure_paths", []))
-            if not result["success"]:
-                success = False
+            for i, code in enumerate(code_blocks):
+                result = self.executor.execute(code, preamble=preamble)
+                all_outputs.append(result)
+                all_figures.extend(result.get("figure_paths", []))
+                if not result["success"]:
+                    success = False
+                # 只执行第一个代码块就够了（通常 Agent 只生成一个块）
+                break
 
-            # 只执行第一个代码块就够了（通常 Agent 只生成一个块）
-            break
+            # 聚合输出
+            combined_output = ""
+            for r in all_outputs:
+                if r["stdout"]:
+                    combined_output += r["stdout"] + "\n"
+                if r["stderr"]:
+                    combined_output += r["stderr"] + "\n"
+                if r["error"]:
+                    combined_output += f"[ERROR] {r['error']}\n"
 
-        # 聚合输出
-        combined_output = ""
-        for r in all_outputs:
-            if r["stdout"]:
-                combined_output += r["stdout"] + "\n"
-            if r["stderr"]:
-                combined_output += r["stderr"] + "\n"
-            if r["error"]:
-                combined_output += f"[ERROR] {r['error']}\n"
+            # 更新 code_history
+            history_entry: dict[str, Any] = {
+                "agent": self.name,
+                "code": code_blocks[0] if code_blocks else "",
+                "output": combined_output,
+                "success": success,
+            }
 
-        # 更新 code_history
-        history_entry = {
-            "agent": self.name,
-            "code": code_blocks[0] if code_blocks else "",
-            "output": combined_output,
-            "success": success,
-        }
+            updated_history = state.get("code_history", []) + [history_entry]
+            updated_figures = state.get("figure_paths", []) + all_figures
 
-        updated_history = state.get("code_history", []) + [history_entry]
-        updated_figures = state.get("figure_paths", []) + all_figures
+            logger.info("Agent [%s] 执行完成, success=%s", self.name, success)
+            return {
+                "last_code": code_blocks[0] if code_blocks else "",
+                "last_output": combined_output,
+                "code_history": updated_history,
+                "figure_paths": updated_figures,
+                "error": None if success else f"{self.name} 执行出错",
+            }
 
-        return {
-            "last_code": code_blocks[0] if code_blocks else "",
-            "last_output": combined_output,
-            "code_history": updated_history,
-            "figure_paths": updated_figures,
-            "error": None if success else f"{self.name} 执行出错",
-        }
+        except Exception:
+            error_msg = f"{self.name} 异常"
+            logger.exception("Agent [%s] 异常", self.name)
+            return {
+                "last_code": "",
+                "last_output": _traceback.format_exc(),
+                "code_history": state.get("code_history", []) + [
+                    {"agent": self.name, "code": "", "output": error_msg, "success": False}
+                ],
+                "figure_paths": state.get("figure_paths", []),
+                "error": error_msg,
+            }
 
     def _build_preamble(self, state: DataAnalysisState) -> str:
-        """构建代码前置 —— 导入常用库并加载数据。"""
+        """构建代码前置 —— 导入常用库并加载数据。包含路径安全校验。"""
         preamble = """
 import pandas as pd
 import numpy as np
@@ -152,8 +189,14 @@ plt.rcParams['axes.unicode_minus'] = False
 sns.set_style("whitegrid")
 """
         # 加载数据：优先从工作副本 (pickle)，fallback 到原始文件
-        if state.get("file_path"):
+        raw_path = state.get("file_path")
+        if raw_path:
             sandbox_dir = config.SANDBOX_DIR
+            try:
+                safe_path = _validate_path_safety(raw_path)
+            except PermissionError as e:
+                logger.warning("路径校验失败: %s", e)
+                safe_path = os.path.realpath(raw_path)
             preamble += f"""
 import os as _os
 import sys
@@ -169,7 +212,7 @@ if _os.path.exists(_working):
         raise
 else:
     # 首次加载：根据文件扩展名选择读取方式
-    _path = r"{state['file_path']}"
+    _path = r"{safe_path}"
     _ext = _os.path.splitext(_path)[1].lower()
     if _ext in ('.xlsx', '.xls'):
         df = pd.read_excel(_path)
@@ -178,7 +221,7 @@ else:
     elif _ext == '.parquet':
         df = pd.read_parquet(_path)
     elif _ext == '.tsv':
-        df = pd.read_csv(_path, sep='\t')
+        df = pd.read_csv(_path, sep='\\t')
     else:
         df = pd.read_csv(_path)
     print(f"✅ 首次加载原始数据: {{df.shape[0]}} 行 × {{df.shape[1]}} 列")

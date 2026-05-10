@@ -1,43 +1,152 @@
 """
 代码沙箱执行器 —— 安全执行 LLM 生成的 Python 代码，捕获输出与异常。
+包含 AST 安全检查，拒绝危险操作。
 """
-
+import ast
+import glob
+import logging
 import os
-import sys
-import io
-import traceback
-import subprocess
-import tempfile
-import uuid
 import re
-from typing import Optional
+import subprocess
+import sys
+import traceback
+import uuid
 from datetime import datetime
+from typing import Any
 
 import config
+
+logger = logging.getLogger(__name__)
+
+
+class SecurityError(Exception):
+    """AST 安全检查发现危险代码时抛出。"""
+    pass
+
+
+class _SafetyInjector:
+    """
+    生成 AST 安全检查代码，注入到执行脚本的 preamble 和 user code 之间。
+    """
+
+    FORBIDDEN_IMPORTS = {'subprocess', 'shutil', 'socket', 'ctypes'}
+    FORBIDDEN_CALLS = {
+        'os.system', 'os.popen', 'os.exec', 'os.execv', 'os.execl',
+        'os.execve', 'os.execle', 'os.execvp', 'os.execvpe',
+        'subprocess.run', 'subprocess.call', 'subprocess.Popen',
+        'subprocess.check_call', 'subprocess.check_output',
+        'shutil.rmtree', 'shutil.move', 'shutil.copy', 'shutil.copytree',
+    }
+
+    @classmethod
+    def build_safety_wrapper(cls, sandbox_dir: str, root_dir: str) -> str:
+        return f'''
+import ast as _ast
+import os as _os
+import sys as _sys
+
+_SANDBOX_DIR = {sandbox_dir!r}
+_ROOT_DIR = {root_dir!r}
+_FORBIDDEN_IMPORTS = {cls.FORBIDDEN_IMPORTS!r}
+_FORBIDDEN_CALLS = {cls.FORBIDDEN_CALLS!r}
+
+class _SecurityVisitor(_ast.NodeVisitor):
+    def visit_Import(self, node):
+        for alias in node.names:
+            top = alias.name.split(".")[0]
+            if top in _FORBIDDEN_IMPORTS:
+                raise PermissionError(f"Security: forbidden import '{{alias.name}}'")
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        if node.module:
+            top = node.module.split(".")[0]
+            if top in _FORBIDDEN_IMPORTS:
+                raise PermissionError(f"Security: forbidden import from '{{node.module}}'")
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        # Check dotted calls like os.system(...)
+        if isinstance(node.func, _ast.Attribute):
+            parts = []
+            obj = node.func
+            while isinstance(obj, _ast.Attribute):
+                parts.append(obj.attr)
+                obj = obj.value
+            if isinstance(obj, _ast.Name):
+                parts.append(obj.id)
+                full = ".".join(reversed(parts))
+                if full in _FORBIDDEN_CALLS:
+                    raise PermissionError(f"Security: forbidden call '{{full}}()'")
+        # Check built-in eval/exec/compile
+        elif isinstance(node.func, _ast.Name):
+            if node.func.id in ("eval", "exec", "compile"):
+                raise PermissionError(f"Security: forbidden built-in '{{node.func.id}}()'")
+            # Check open() writing outside sandbox/root
+            if node.func.id == "open" and node.args:
+                mode = "r"
+                if len(node.args) > 1 and isinstance(node.args[1], _ast.Constant):
+                    mode = str(node.args[1].value)
+                if "w" in mode or "a" in mode or "+" in mode:
+                    if isinstance(node.args[0], _ast.Constant):
+                        fpath = str(node.args[0].value)
+                        abspath = _os.path.abspath(fpath)
+                        if not (abspath.startswith(_SANDBOX_DIR) or abspath.startswith(_ROOT_DIR)):
+                            raise PermissionError(f"Security: writing outside project: '{{fpath}}'")
+        self.generic_visit(node)
+
+def _run_safety_check(user_code: str) -> None:
+    try:
+        tree = _ast.parse(user_code)
+    except SyntaxError as e:
+        raise PermissionError(f"Security: syntax error in code: {{e}}")
+    _SecurityVisitor().visit(tree)
+'''
+    @staticmethod
+    def danger_prefix() -> str:
+        return "# --- SAFETY CHECK ---"
 
 
 class CodeExecutor:
     """
     在子进程中执行 Python 代码，提供：
+    - AST 安全检查（拒绝危险模块/调用）
     - 超时控制（config.CODE_TIMEOUT_SEC）
     - stdout/stderr 捕获
     - 输出行数截断
-    - 安全的临时工作目录
+    - 临时目录清理
+    - 自动收集新生成的图表文件
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         config.ensure_dirs()
         self.sandbox_dir = config.SANDBOX_DIR
         self.timeout = config.CODE_TIMEOUT_SEC
         self.max_lines = config.CODE_MAX_OUTPUT_LINES
+        self.project_root = os.path.realpath(
+            os.path.join(os.path.dirname(__file__), '..')
+        )
+        self._safety_code = _SafetyInjector.build_safety_wrapper(
+            self.sandbox_dir, self.project_root
+        )
 
-    def execute(self, code: str, preamble: str = "") -> dict:
+    def _cleanup_old_artifacts(self) -> None:
+        """每次执行前清理旧 pkl 和图片文件，避免跨 case 污染。"""
+        patterns = ['*.pkl', '*.png', '*.jpg', '*.jpeg', '*.svg', '*.pdf']
+        for pattern in patterns:
+            for fpath in glob.glob(os.path.join(self.sandbox_dir, pattern)):
+                try:
+                    os.remove(fpath)
+                except OSError:
+                    pass
+
+    def execute(self, code: str, preamble: str = "") -> dict[str, Any]:
         """
         执行代码并返回结构化结果。
 
         Args:
-            code: 要执行的 Python 代码
-            preamble: 前置代码（如 import、数据加载），不会被截断输出
+            code: 要执行的 Python 代码（LLM 生成，会经过 AST 安全检查）
+            preamble: 前置代码（如 import、数据加载），不受安全检查
 
         Returns:
             {
@@ -47,14 +156,16 @@ class CodeExecutor:
                 "error": str | None,
                 "truncated": bool,
                 "duration_ms": int,
-                "figure_paths": list[str],   # 代码中 savefig 产生的文件
+                "figure_paths": list[str],
             }
         """
+        self._cleanup_old_artifacts()
         full_code = self._build_full_code(preamble, code)
         script_path = self._write_temp_script(full_code)
 
         start = datetime.now()
         try:
+            logger.info("Executing code in sandbox: %s", self.sandbox_dir)
             result = subprocess.run(
                 [sys.executable, script_path],
                 capture_output=True,
@@ -78,6 +189,7 @@ class CodeExecutor:
             # 收集新生成的图表
             figure_paths = self._collect_new_figures()
 
+            logger.info("Exit code: %d, duration: %dms", result.returncode, duration_ms)
             return {
                 "success": result.returncode == 0,
                 "stdout": stdout,
@@ -90,6 +202,7 @@ class CodeExecutor:
 
         except subprocess.TimeoutExpired:
             duration_ms = int((datetime.now() - start).total_seconds() * 1000)
+            logger.warning("Execution timed out after %ds", self.timeout)
             return {
                 "success": False,
                 "stdout": "",
@@ -101,6 +214,7 @@ class CodeExecutor:
             }
         except Exception as e:
             duration_ms = int((datetime.now() - start).total_seconds() * 1000)
+            logger.exception("Execution exception")
             return {
                 "success": False,
                 "stdout": "",
@@ -114,7 +228,16 @@ class CodeExecutor:
             self._cleanup_script(script_path)
 
     def _build_full_code(self, preamble: str, code: str) -> str:
-        """组装完整脚本：preamble（不可见）+ 用户代码（截获输出）。"""
+        """
+        组装完整脚本：
+        1. preamble（导入、数据加载）
+        2. inline safety check（对 user code 做 AST 分析）
+        3. user code（stdout 捕获执行）
+        4. inter-agent persistence（自动保存修改后的 df）
+        """
+        safety_check = self._safety_code
+        user_code_repr = repr(code)
+
         wrapper = f'''
 import sys
 import io
@@ -124,6 +247,10 @@ os.chdir(r"{self.sandbox_dir}")
 
 # ── Preamble ──
 {preamble}
+
+# ── Safety Check ──
+{safety_check}
+_run_safety_check({user_code_repr})
 
 # ── User Code ──
 _capture = io.StringIO()
@@ -165,7 +292,7 @@ except Exception:
             f.write(code)
         return script_path
 
-    def _cleanup_script(self, path: str):
+    def _cleanup_script(self, path: str) -> None:
         """删除临时脚本。"""
         try:
             os.remove(path)

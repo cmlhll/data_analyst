@@ -5,6 +5,7 @@ LangGraph 工作流编排 —— StateGraph 构建 + 条件路由。
 START → supervisor → {loader, cleaner, eda, viz, ml, reporter}
                    → supervisor → ... → reporter → FINISH
 """
+import logging
 
 from typing import Literal
 from langgraph.graph import StateGraph, END
@@ -19,6 +20,8 @@ from agents.visualization import VisualizationAgent
 from agents.ml_agent import MLAgent
 from agents.reporter import ReporterAgent
 import config
+
+logger = logging.getLogger(__name__)
 
 
 # ── 构建节点 ───────────────────────────────────────────────
@@ -217,8 +220,14 @@ def run_analysis(
     config_dict = {"configurable": {"thread_id": thread_id}}
     final_state = None
 
+    logger.info("开始分析: file=%s query=%s thread=%s", file_path, user_query, thread_id)
+    node_count = 0
+
+    # 获取完整的 state snapshot（含 reducer 聚合后的所有字段）
     for event in app.stream(initial_state, config_dict):
         for node_name, node_output in event.items():
+            logger.info("节点 [%s] 完成 (第 %d 步)", node_name, node_count)
+            node_count += 1
             print(f"\n{'='*60}")
             print(f"📍 节点: {node_name}")
             print(f"{'='*60}")
@@ -231,6 +240,10 @@ def run_analysis(
             else:
                 output = node_output.get("last_output", "")
                 print(output[:1000] if output else "无输出")
-            final_state = node_output
+            # 从 checkpoint 获取完整的聚合 state
+            final_state = app.get_state(config_dict)
+            # 展开到普通 dict 以便 eval runner 使用
+            if final_state:
+                final_state = dict(final_state.values)
 
     return final_state if final_state else {}

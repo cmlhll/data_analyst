@@ -40,9 +40,18 @@ def main() -> int:
     generate_all(data_dir)
     cases = load_cases(data_dir / 'cases.json')
 
+    from tools.code_executor import CodeExecutor
+    executor = CodeExecutor()
     results = []
     for i, case in enumerate(cases, 1):
         print(f"[{i}/{len(cases)}] {case.get('dataset_id')} :: {case.get('query')}")
+        # 每个 case 前清理 sandbox，避免前一个 case 的数据污染
+        import shutil, os
+        if os.path.isdir(executor.sandbox_dir):
+            for fname in os.listdir(executor.sandbox_dir):
+                fpath = os.path.join(executor.sandbox_dir, fname)
+                if fname.endswith('.pkl') or fname.endswith(('.png', '.jpg', '.jpeg', '.svg', '.pdf')):
+                    os.remove(fpath)
         state = run_mock(case) if args.mode == 'mock' else run_agent(case)
         results.append(score_case(case, state))
 

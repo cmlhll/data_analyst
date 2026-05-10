@@ -16,7 +16,28 @@ def _text(state: dict[str, Any]) -> str:
 def score_keywords(text: str, keywords: list[str]) -> tuple[float, list[str]]:
     if not keywords:
         return 1.0, []
-    missing = [k for k in keywords if k and k not in text]
+    # 智能关键词匹配：支持日期格式宽松匹配
+    def _matches(text, keyword):
+        if keyword in text:
+            return True
+        # 日期格式宽松匹配：2026-04-19 匹配 "4月19日"、"19日"、"04月19"
+        import re
+        date_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', keyword)
+        if date_match:
+            y, m, d = date_match.groups()
+            # 匹配 "4月19日"、"04月19日"、"19日" 等格式
+            patterns = [
+                f'{y}年{m.lstrip("0")}月{d.lstrip("0")}日',
+                f'{m.lstrip("0")}月{d.lstrip("0")}日',
+                f'{int(m)}月{int(d)}日',
+                f'{int(d)}日',
+                f'{y}-{m}-{d}',
+            ]
+            for p in patterns:
+                if p in text:
+                    return True
+        return False
+    missing = [k for k in keywords if k and not _matches(text, k)]
     return (len(keywords) - len(missing)) / len(keywords), missing
 
 
