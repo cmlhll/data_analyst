@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,12 @@ def run_agent(case: dict) -> dict:
     return run_analysis(file_path=str(ROOT / case['file_path']), user_query=case['query'], thread_id=f"eval-{case.get('case_id', case['dataset_id'])}")
 
 
+def _reset_sandbox() -> None:
+    """每次 case 前清理沙箱工作数据，避免跨 case 污染。"""
+    from tools.code_executor import CodeExecutor
+    CodeExecutor().reset_working_data()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['mock', 'agent'], default='mock')
@@ -40,20 +47,26 @@ def main() -> int:
     generate_all(data_dir)
     cases = load_cases(data_dir / 'cases.json')
 
-    from tools.code_executor import CodeExecutor
-    executor = CodeExecutor()
     results = []
     for i, case in enumerate(cases, 1):
-        print(f"[{i}/{len(cases)}] {case.get('dataset_id')} :: {case.get('query')}")
-        # 每个 case 前清理 sandbox，避免前一个 case 的数据污染
-        import shutil, os
-        if os.path.isdir(executor.sandbox_dir):
-            for fname in os.listdir(executor.sandbox_dir):
-                fpath = os.path.join(executor.sandbox_dir, fname)
-                if fname.endswith('.pkl') or fname.endswith(('.png', '.jpg', '.jpeg', '.svg', '.pdf')):
-                    os.remove(fpath)
-        state = run_mock(case) if args.mode == 'mock' else run_agent(case)
-        results.append(score_case(case, state))
+        dataset_id = case.get('dataset_id', 'unknown')
+        print(f"[{i}/{len(cases)}] {dataset_id} :: {case.get('query')}")
+        _reset_sandbox()
+        try:
+            state = run_mock(case) if args.mode == 'mock' else run_agent(case)
+            result = score_case(case, state)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            result = {
+                'case_id': case.get('case_id', dataset_id),
+                'dataset_id': dataset_id,
+                'score': 0.0,
+                'subscores': {},
+                'issues': [{'type': 'eval_error', 'items': ['case execution failed']}],
+                'report_preview': '',
+            }
+        results.append(result)
 
     out = ROOT / args.output_dir
     out.mkdir(parents=True, exist_ok=True)

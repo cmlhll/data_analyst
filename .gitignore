@@ -5,3 +5,7 @@ venv/
 .env
 .DS_Store
 sandbox/
+eval/results/
+eval/generated_data/
+figures/
+*.pkl

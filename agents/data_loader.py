@@ -2,6 +2,8 @@
 DataLoader Agent —— 加载数据文件并生成数据摘要。
 """
 
+import re
+
 from .base import BaseAgent
 from state import DataAnalysisState
 
@@ -42,8 +44,6 @@ class DataLoaderAgent(BaseAgent):
         result = super().run(state)
 
         # 从输出中解析 rows/cols
-        # 简单正则提取
-        import re
         output = result.get("last_output", "")
         shape_match = re.search(r"(\d+)\s*[行row]+\s*[×xX]\s*(\d+)\s*[列col]+", output, re.IGNORECASE)
         if shape_match:

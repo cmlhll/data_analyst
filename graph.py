@@ -217,14 +217,14 @@ def run_analysis(
         "error": None,
     }
 
-    config_dict = {"configurable": {"thread_id": thread_id}}
+    run_cfg = {"configurable": {"thread_id": thread_id}}
     final_state = None
 
     logger.info("开始分析: file=%s query=%s thread=%s", file_path, user_query, thread_id)
     node_count = 0
 
     # 获取完整的 state snapshot（含 reducer 聚合后的所有字段）
-    for event in app.stream(initial_state, config_dict):
+    for event in app.stream(initial_state, run_cfg):
         for node_name, node_output in event.items():
             logger.info("节点 [%s] 完成 (第 %d 步)", node_name, node_count)
             node_count += 1
@@ -241,7 +241,7 @@ def run_analysis(
                 output = node_output.get("last_output", "")
                 print(output[:1000] if output else "无输出")
             # 从 checkpoint 获取完整的聚合 state
-            final_state = app.get_state(config_dict)
+            final_state = app.get_state(run_cfg)
             # 展开到普通 dict 以便 eval runner 使用
             if final_state:
                 final_state = dict(final_state.values)

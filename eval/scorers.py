@@ -21,7 +21,6 @@ def score_keywords(text: str, keywords: list[str]) -> tuple[float, list[str]]:
         if keyword in text:
             return True
         # 日期格式宽松匹配：2026-04-19 匹配 "4月19日"、"19日"、"04月19"
-        import re
         date_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', keyword)
         if date_match:
             y, m, d = date_match.groups()

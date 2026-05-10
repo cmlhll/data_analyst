@@ -6,6 +6,12 @@ import logging
 import os
 from typing import Optional
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+
 try:
     from dotenv import load_dotenv
     # 从项目根目录加载 .env 文件

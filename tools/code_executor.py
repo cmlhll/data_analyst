@@ -130,8 +130,8 @@ class CodeExecutor:
             self.sandbox_dir, self.project_root
         )
 
-    def _cleanup_old_artifacts(self) -> None:
-        """每次执行前清理旧 pkl 和图片文件，避免跨 case 污染。"""
+    def reset_working_data(self) -> None:
+        """跨 case 清理沙箱中的工作数据和图片，保留临时脚本。"""
         patterns = ['*.pkl', '*.png', '*.jpg', '*.jpeg', '*.svg', '*.pdf']
         for pattern in patterns:
             for fpath in glob.glob(os.path.join(self.sandbox_dir, pattern)):
@@ -159,7 +159,6 @@ class CodeExecutor:
                 "figure_paths": list[str],
             }
         """
-        self._cleanup_old_artifacts()
         full_code = self._build_full_code(preamble, code)
         script_path = self._write_temp_script(full_code)
 

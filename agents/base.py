@@ -192,11 +192,7 @@ sns.set_style("whitegrid")
         raw_path = state.get("file_path")
         if raw_path:
             sandbox_dir = config.SANDBOX_DIR
-            try:
-                safe_path = _validate_path_safety(raw_path)
-            except PermissionError as e:
-                logger.warning("路径校验失败: %s", e)
-                safe_path = os.path.realpath(raw_path)
+            safe_path = _validate_path_safety(raw_path)
             preamble += f"""
 import os as _os
 import sys
