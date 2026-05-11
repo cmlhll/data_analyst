@@ -57,8 +57,15 @@ MAX_COLS_DISPLAY: int = int(os.getenv("MAX_COLS_DISPLAY", "30"))
 MAX_AGENT_ITERATIONS: int = int(os.getenv("MAX_AGENT_ITERATIONS", "3"))
 MAX_WORKFLOW_LOOPS: int = int(os.getenv("MAX_WORKFLOW_LOOPS", "10"))
 
+# ── 自检系统配置 ──────────────────────────────────────────
+SELF_INSPECT_DIR: str = os.getenv(
+    "SELF_INSPECT_DIR",
+    os.path.join(os.path.dirname(__file__), "self_inspect"),
+)
+SLOW_EXECUTION_THRESHOLD_MS: int = int(os.getenv("SLOW_EXECUTION_THRESHOLD_MS", "30000"))
+
 
 def ensure_dirs() -> None:
     """确保输出目录存在。"""
-    for d in [SANDBOX_DIR, FIGURE_DIR]:
+    for d in [SANDBOX_DIR, FIGURE_DIR, SELF_INSPECT_DIR]:
         os.makedirs(d, exist_ok=True)

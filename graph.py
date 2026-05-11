@@ -19,6 +19,7 @@ from agents.eda import EDAAgent
 from agents.visualization import VisualizationAgent
 from agents.ml_agent import MLAgent
 from agents.reporter import ReporterAgent
+from self_inspect import PostMortemAnalyzer
 import config
 
 logger = logging.getLogger(__name__)
@@ -245,5 +246,27 @@ def run_analysis(
             # 展开到普通 dict 以便 eval runner 使用
             if final_state:
                 final_state = dict(final_state.values)
+
+    # ── 自检：运行结束后触发事后分析 ─────────────────────────
+    if final_state is not None:
+        inspection_log = final_state.get("inspection_log", [])
+        if inspection_log:
+            logger.info("自检: 发现 %d 个问题，正在生成优化报告...", len(inspection_log))
+        else:
+            logger.info("自检: 运行顺利，未发现问题")
+        analyzer = PostMortemAnalyzer(session_id=thread_id)
+        result = analyzer.analyze_and_save(inspection_log)
+
+        # 将优化报告追加到最终分析报告的末尾
+        existing_report = final_state.get("report", "")
+        if existing_report:
+            final_state["report"] = existing_report + "\n\n---\n\n" + result["report"]
+        else:
+            final_state["report"] = result["report"]
+        final_state["inspection_report"] = result["report"]
+
+        if result["report_path"]:
+            logger.info("自检报告已保存: %s", result["report_path"])
+            print(f"\n📋 自检报告已保存: {result['report_path']}")
 
     return final_state if final_state else {}

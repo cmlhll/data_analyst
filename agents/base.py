@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import time as _time
 import traceback as _traceback
 from abc import ABC, abstractmethod
 from typing import Any, Optional
@@ -16,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import config
 from state import DataAnalysisState
 from tools.code_executor import CodeExecutor
+from self_inspect import record_issue
 
 logger = logging.getLogger(__name__)
 
@@ -103,11 +105,13 @@ class BaseAgent(ABC):
         1. LLM 生成分析代码
         2. 代码沙箱执行
         3. 将结果写回 state
+        4. 记录执行时序和检测问题（自检系统）
 
         统一 try/except 包装，异常时返回结构化错误 state。
         """
         try:
             logger.info("Agent [%s] 开始执行", self.name)
+            start_time = _time.monotonic()
             llm_response = self.call_llm(state)
             code_blocks = self.extract_code_blocks(llm_response)
 
@@ -127,6 +131,8 @@ class BaseAgent(ABC):
                 # 只执行第一个代码块就够了（通常 Agent 只生成一个块）
                 break
 
+            elapsed_ms = (_time.monotonic() - start_time) * 1000.0
+
             # 聚合输出
             combined_output = ""
             for r in all_outputs:
@@ -138,28 +144,47 @@ class BaseAgent(ABC):
                     combined_output += f"[ERROR] {r['error']}\n"
 
             # 更新 code_history
+            code_used = code_blocks[0] if code_blocks else ""
             history_entry: dict[str, Any] = {
                 "agent": self.name,
-                "code": code_blocks[0] if code_blocks else "",
+                "code": code_used,
                 "output": combined_output,
                 "success": success,
+                "duration_ms": elapsed_ms,
             }
 
             updated_history = state.get("code_history", []) + [history_entry]
             updated_figures = state.get("figure_paths", []) + all_figures
 
-            logger.info("Agent [%s] 执行完成, success=%s", self.name, success)
+            # ── 自检：检测问题 ────────────────────────────
+            issues = self._detect_issues(
+                state, code_used, success, combined_output, elapsed_ms,
+            )
+
+            logger.info(
+                "Agent [%s] 执行完成, success=%s, duration=%.0fms, issues=%d",
+                self.name, success, elapsed_ms, len(issues),
+            )
             return {
-                "last_code": code_blocks[0] if code_blocks else "",
+                "last_code": code_used,
                 "last_output": combined_output,
                 "code_history": updated_history,
                 "figure_paths": updated_figures,
                 "error": None if success else f"{self.name} 执行出错",
+                "inspection_log": issues,
             }
 
         except Exception:
             error_msg = f"{self.name} 异常"
             logger.exception("Agent [%s] 异常", self.name)
+            # 记录异常到自检系统
+            err_issue = record_issue(
+                state,
+                category="CODE_FAILURE",
+                severity="HIGH",
+                detail=_traceback.format_exc(),
+                agent_name=self.name,
+            )
             return {
                 "last_code": "",
                 "last_output": _traceback.format_exc(),
@@ -168,6 +193,7 @@ class BaseAgent(ABC):
                 ],
                 "figure_paths": state.get("figure_paths", []),
                 "error": error_msg,
+                "inspection_log": [err_issue],
             }
 
     def _build_preamble(self, state: DataAnalysisState) -> str:
@@ -225,3 +251,86 @@ else:
     df.to_pickle(_working)
 """
         return preamble.strip()
+
+    def _detect_issues(
+        self,
+        state: DataAnalysisState,
+        code: str,
+        success: bool,
+        output: str,
+        duration_ms: float,
+    ) -> list[dict]:
+        """
+        分析执行结果，检测问题并记录到自检系统。
+
+        检测策略：
+        - 代码执行失败 → CODE_FAILURE (HIGH)
+        - 执行时间超过阈值 → EXECUTION_SLOW (MEDIUM / HIGH)
+        - 输出中出现内存相关错误 → MEMORY_HIGH (HIGH)
+        - 输出中出现意外空值 → UNEXPECTED_NULL (LOW)
+        - 数据加载阶段的错误 → DATA_LOAD_ERROR (HIGH)
+        """
+        issues: list[dict] = []
+
+        # 1. 代码执行失败
+        if not success:
+            issues.append(record_issue(
+                state,
+                category="CODE_FAILURE",
+                severity="HIGH",
+                detail=f"Agent [{self.name}] 代码执行失败，输出前200字符: {output[:200]}",
+                agent_name=self.name,
+                duration_ms=duration_ms,
+            ))
+
+        # 2. 执行速度慢
+        if duration_ms > config.SLOW_EXECUTION_THRESHOLD_MS:
+            severity = "HIGH" if duration_ms > config.SLOW_EXECUTION_THRESHOLD_MS * 2 else "MEDIUM"
+            issues.append(record_issue(
+                state,
+                category="EXECUTION_SLOW",
+                severity=severity,
+                detail=f"Agent [{self.name}] 执行耗时 {duration_ms:.0f}ms，"
+                       f"超过阈值 {config.SLOW_EXECUTION_THRESHOLD_MS}ms",
+                agent_name=self.name,
+                duration_ms=duration_ms,
+            ))
+
+        # 3. 内存异常
+        mem_keywords = ["memory", "Memory", "MemoryError", "OutOfMemory"]
+        if any(kw in output for kw in mem_keywords):
+            issues.append(record_issue(
+                state,
+                category="MEMORY_HIGH",
+                severity="HIGH",
+                detail=f"Agent [{self.name}] 输出中包含内存异常关键词",
+                agent_name=self.name,
+                duration_ms=duration_ms,
+            ))
+
+        # 4. 数据加载异常（只对 data_loader agent 检查）
+        if self.name == "data_loader" and not success:
+            issues.append(record_issue(
+                state,
+                category="DATA_LOAD_ERROR",
+                severity="HIGH",
+                detail=f"数据加载失败: {output[:300]}",
+                agent_name=self.name,
+                duration_ms=duration_ms,
+            ))
+
+        # 5. 意外的空值（只对 data_cleaner / eda 检查）
+        if self.name in ("data_cleaner", "eda") and success:
+            null_keywords = ["NaN", "nan", "None", "null", "missing"]
+            null_count = sum(1 for kw in null_keywords if kw in output)
+            if null_count >= 2:
+                issues.append(record_issue(
+                    state,
+                    category="UNEXPECTED_NULL",
+                    severity="LOW",
+                    detail=f"Agent [{self.name}] 输出中发现 {null_count} 类空值关键词",
+                    agent_name=self.name,
+                    duration_ms=duration_ms,
+                ))
+
+        return issues

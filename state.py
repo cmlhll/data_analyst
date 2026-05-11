@@ -88,3 +88,7 @@ class DataAnalysisState(TypedDict):
     next_agent: str
     loop_count: int
     error: Optional[str]
+
+    # 自检
+    inspection_log: list[dict]
+    inspection_report: str
