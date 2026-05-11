@@ -29,8 +29,10 @@ logger = logging.getLogger(__name__)
 LLM_MODEL: str = os.getenv("DATA_ANALYST_MODEL", "gpt-4o")
 LLM_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY") or os.getenv("DATA_ANALYST_API_KEY")
 LLM_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "")
-LLM_TEMPERATURE: float = float(os.getenv("DATA_ANALYST_TEMPERATURE", "0.1"))
-LLM_MAX_TOKENS: int = int(os.getenv("DATA_ANALYST_MAX_TOKENS", "4096"))
+LLM_TEMPERATURE: float = float(os.getenv("DATA_ANALYST_TEMPERATURE", "0.05"))
+LLM_MAX_TOKENS: int = int(os.getenv("DATA_ANALYST_MAX_TOKENS", "2048"))
+LLM_CODE_MAX_TOKENS: int = int(os.getenv("DATA_ANALYST_CODE_MAX_TOKENS", "3072"))
+LLM_REPORT_MAX_TOKENS: int = int(os.getenv("DATA_ANALYST_REPORT_MAX_TOKENS", "4096"))
 
 # ── 代码沙箱配置 ──────────────────────────────────────────
 CODE_TIMEOUT_SEC: int = int(os.getenv("CODE_TIMEOUT_SEC", "60"))

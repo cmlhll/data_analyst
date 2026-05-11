@@ -8,19 +8,11 @@ from .base import BaseAgent
 from state import DataAnalysisState
 
 
-LOADER_SYSTEM_PROMPT = """你是一个数据加载专家。你的任务是：
-1. 使用 pandas 加载指定的数据文件
-2. 检查数据类型、缺失值、重复行
-3. 生成数据摘要报告
+LOADER_SYSTEM_PROMPT = """你是数据加载专家。输出 ```python ... ``` 代码块，用 print() 输出结果。
 
-输出格式：
-- 先用自然语言描述数据概况
-- 然后用 ```python ... ``` 代码块包含完整的分析代码
-
-代码要求：
-- 变量 `df` 已经被加载为 pandas DataFrame
-- 使用 print() 输出关键信息
-- 输出应包括：shape, dtypes, missing counts, duplicate count, head(10), describe()
+要求：
+- 变量 `df` 已加载为 pandas DataFrame
+- 输出：shape, dtypes, missing counts, duplicate count, head(10), describe()
 """
 
 

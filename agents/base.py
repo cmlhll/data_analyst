@@ -57,7 +57,7 @@ class BaseAgent(ABC):
         kwargs: dict[str, Any] = {
             "model": config.LLM_MODEL,
             "temperature": config.LLM_TEMPERATURE,
-            "max_tokens": config.LLM_MAX_TOKENS,
+            "max_tokens": config.LLM_CODE_MAX_TOKENS,
         }
         if config.LLM_API_KEY:
             kwargs["api_key"] = config.LLM_API_KEY
