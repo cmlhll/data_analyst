@@ -30,7 +30,6 @@ class ReporterAgent(BaseAgent):
     def __init__(self, llm: Optional[ChatOpenAI] = None) -> None:
         # Reporter 需要更大的 output token 来生成完整报告
         if llm is None:
-            from langchain_openai import ChatOpenAI
             import config
             kwargs: dict[str, Any] = {
                 "model": config.LLM_MODEL,
