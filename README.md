@@ -144,6 +144,26 @@ python pipeline.py results
 
 ---
 
+## ✅ TDD 测试流程（开发约束）
+
+请遵循 `TESTING_TDD.md`：
+
+- 业务逻辑变更：先补测试
+- Bug 修复：先写复现测试
+- 重构：保证测试不变
+- Agent 生成代码：自动执行测试（至少 `make tdd-check`）
+
+常用命令：
+
+```bash
+make tdd-check
+make test
+# 或直接
+python -m pytest -q
+```
+
+---
+
 ## 📊 离线评测
 
 项目内置 `eval/` 子系统，用于评估"用户上传文件 + 自然语言问题"的数据分析效果。
