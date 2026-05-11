@@ -158,8 +158,6 @@ python pipeline.py results
 ```bash
 make tdd-check
 make test
-# 或直接
-python -m pytest -q
 ```
 
 ---
