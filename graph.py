@@ -212,6 +212,9 @@ def run_analysis(
         "feature_importance": {},
         # 报告
         "report": "",
+        # 自检
+        "inspection_log": [],
+        "inspection_report": "",
         # 控制
         "next_agent": "data_loader",
         "loop_count": 0,

@@ -1,7 +1,7 @@
 .PHONY: test tdd-check
 
 test:
-	pytest -q
+	python -m pytest -q
 
 tdd-check:
-	pytest -q --maxfail=1
+	python -m pytest -q --maxfail=1

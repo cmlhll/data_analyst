@@ -5,6 +5,7 @@ Supervisor Agent —— 任务路由器。
 不执行代码，仅输出路由决策。
 """
 
+import config
 import json
 import re
 from typing import Literal
@@ -124,4 +125,3 @@ class SupervisorAgent(BaseAgent):
         return {"next": "FINISH", "reason": "无法解析决策，默认结束"}
 
 
-import config  # noqa: E402

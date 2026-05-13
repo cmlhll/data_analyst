@@ -85,14 +85,19 @@ class _SecurityVisitor(_ast.NodeVisitor):
             # Check open() writing outside sandbox/root
             if node.func.id == "open" and node.args:
                 mode = "r"
+                # Check positional arg (second argument)
                 if len(node.args) > 1 and isinstance(node.args[1], _ast.Constant):
                     mode = str(node.args[1].value)
-                if "w" in mode or "a" in mode or "+" in mode:
+                # Check keyword argument
+                for kw in getattr(node, 'keywords', []):
+                    if kw.arg == 'mode' and isinstance(kw.value, _ast.Constant):
+                        mode = str(kw.value.value)
+                if any(c in mode for c in "wax+"):
                     if isinstance(node.args[0], _ast.Constant):
                         fpath = str(node.args[0].value)
                         abspath = _os.path.abspath(fpath)
                         if not (abspath.startswith(_SANDBOX_DIR) or abspath.startswith(_ROOT_DIR)):
-                            raise PermissionError(f"Security: writing outside project: '{{fpath}}'")
+                            raise PermissionError(f"Security: writing outside project: '{fpath}'")
         self.generic_visit(node)
 
 def _run_safety_check(user_code: str) -> None:
