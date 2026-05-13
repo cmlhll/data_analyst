@@ -4,6 +4,8 @@ Reporter Agent —— 汇总分析结果，生成 Markdown 报告。
 
 from typing import Any, Optional
 
+from langchain_openai import ChatOpenAI
+
 from .base import BaseAgent
 from state import DataAnalysisState
 
