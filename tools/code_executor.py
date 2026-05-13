@@ -97,7 +97,7 @@ class _SecurityVisitor(_ast.NodeVisitor):
                         fpath = str(node.args[0].value)
                         abspath = _os.path.abspath(fpath)
                         if not (abspath.startswith(_SANDBOX_DIR) or abspath.startswith(_ROOT_DIR)):
-                            raise PermissionError(f"Security: writing outside project: '{fpath}'")
+                            raise PermissionError(f"Security: writing outside project: '{{fpath}}'")
         self.generic_visit(node)
 
 def _run_safety_check(user_code: str) -> None:
