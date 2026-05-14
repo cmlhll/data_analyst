@@ -2,11 +2,12 @@
 LangGraph 工作流编排 —— StateGraph 构建 + 条件路由。
 
 流程：
-START → supervisor → {loader, cleaner, eda, viz, ml, reporter}
-                   → supervisor → ... → reporter → FINISH
+START → {data_understander (dataset mode) | supervisor (file mode)}
+       → supervisor → {loader, cleaner, eda, viz, ml, reporter}
+                      → supervisor → ... → reporter → FINISH
 """
 import logging
-
+import os
 from typing import Literal
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -19,6 +20,7 @@ from agents.eda import EDAAgent
 from agents.visualization import VisualizationAgent
 from agents.ml_agent import MLAgent
 from agents.reporter import ReporterAgent
+from agents.data_understander import DataUnderstanderAgent
 from self_inspect import PostMortemAnalyzer
 import config
 
@@ -71,6 +73,19 @@ def reporter_node(state: DataAnalysisState) -> dict:
     return agent.run(state)
 
 
+def data_understander_node(state: DataAnalysisState) -> dict:
+    """数据集理解节点（仅数据集模式）。"""
+    agent = DataUnderstanderAgent()
+    result = agent.run(state)
+    # 成功加载数据后标记 data_loader 步骤完成
+    if not state.get("error"):
+        completed = state.get("completed_steps", [])
+        if "加载并检查数据" not in completed:
+            new_completed = completed + ["加载并检查数据"]
+            result["completed_steps"] = new_completed
+    return result
+
+
 # ── 条件路由 ───────────────────────────────────────────────
 
 def route_after_supervisor(state: DataAnalysisState) -> Literal[
@@ -108,6 +123,13 @@ def route_after_agent(state: DataAnalysisState) -> Literal["supervisor", "__end_
     return "supervisor"
 
 
+def route_initial(state: DataAnalysisState) -> Literal["supervisor", "data_understander"]:
+    """初始路由：数据集模式 -> data_understander，文件模式 -> supervisor。"""
+    if state.get("mode") == "dataset":
+        return "data_understander"
+    return "supervisor"
+
+
 # ── 构建图 ─────────────────────────────────────────────────
 
 def build_graph() -> StateGraph:
@@ -122,9 +144,19 @@ def build_graph() -> StateGraph:
     workflow.add_node("visualization", visualization_node)
     workflow.add_node("ml_agent", ml_agent_node)
     workflow.add_node("reporter", reporter_node)
+    workflow.add_node("data_understander", data_understander_node)
 
-    # 入口: supervisor
-    workflow.set_entry_point("supervisor")
+    # 初始条件路由：根据模式选择入口
+    workflow.set_conditional_entry_point(
+        route_initial,
+        {
+            "supervisor": "supervisor",
+            "data_understander": "data_understander",
+        },
+    )
+
+    # data_understander → supervisor
+    workflow.add_edge("data_understander", "supervisor")
 
     # supervisor → 各 agent
     workflow.add_conditional_edges(
@@ -162,28 +194,57 @@ def build_graph() -> StateGraph:
 # ── 便捷运行 ───────────────────────────────────────────────
 
 def run_analysis(
-    file_path: str,
+    file_path: str = "",
     user_query: str = "请对这份数据进行全面的数据分析",
     thread_id: str = "default",
+    dataset_dir: str = "",
 ) -> dict:
     """
     执行端到端数据分析。
 
     Args:
-        file_path: 数据文件路径
+        file_path: 数据文件路径（文件模式）
         user_query: 分析需求
         thread_id: 会话 ID（用于多轮对话）
+        dataset_dir: 数据集目录路径（数据集模式，含 metadata.md）
 
     Returns:
         最终 state dict
     """
     app = build_graph()
 
+    # 判断模式
+    is_dataset_mode = bool(dataset_dir)
+    mode = "dataset" if is_dataset_mode else "file"
+
+    # 数据集模式：读取 metadata 和文件列表
+    metadata_content = ""
+    data_tables = {}
+    actual_file_path = file_path
+
+    if is_dataset_mode:
+        meta_path = os.path.join(dataset_dir, "metadata.md")
+        if os.path.isfile(meta_path):
+            with open(meta_path, "r", encoding="utf-8") as f:
+                metadata_content = f.read()
+
+        # 发现数据文件
+        supported_exts = {".csv", ".tsv", ".xlsx", ".xls", ".json", ".parquet"}
+        for fname in sorted(os.listdir(dataset_dir)):
+            ext = os.path.splitext(fname)[1].lower()
+            if ext in supported_exts:
+                table_name = os.path.splitext(fname)[0]
+                data_tables[table_name] = os.path.join(dataset_dir, fname)
+
+        # 如果有数据文件，用第一个作为 file_path（部分功能可能依赖）
+        if data_tables and not actual_file_path:
+            actual_file_path = list(data_tables.values())[0]
+
     initial_state: DataAnalysisState = {
         # 消息
         "messages": [],
         # 数据
-        "file_path": file_path,
+        "file_path": actual_file_path,
         "dataframe_json": "",
         "data_info": "",
         "column_names": [],
@@ -216,15 +277,20 @@ def run_analysis(
         "inspection_log": [],
         "inspection_report": "",
         # 控制
-        "next_agent": "data_loader",
+        "next_agent": "data_understander" if is_dataset_mode else "data_loader",
         "loop_count": 0,
         "error": None,
+        # 数据集模式
+        "dataset_dir": dataset_dir,
+        "metadata_content": metadata_content,
+        "data_tables": data_tables,
+        "mode": mode,
     }
 
     run_cfg = {"configurable": {"thread_id": thread_id}}
     final_state = None
 
-    logger.info("开始分析: file=%s query=%s thread=%s", file_path, user_query, thread_id)
+    logger.info("开始分析: mode=%s file=%s query=%s thread=%s", mode, actual_file_path, user_query, thread_id)
     node_count = 0
 
     # 获取完整的 state snapshot（含 reducer 聚合后的所有字段）
@@ -239,6 +305,8 @@ def run_analysis(
                 print(f"路由决策: {node_output.get('next_agent', 'N/A')}")
                 if "messages" in node_output and node_output["messages"]:
                     print(node_output["messages"][-1].content)
+            elif node_name == "data_understander":
+                print(node_output.get("last_output", "")[:1000])
             elif node_name == "reporter":
                 print(node_output.get("report", "")[:500] + "..." if len(node_output.get("report", "")) > 500 else node_output.get("report", ""))
             else:

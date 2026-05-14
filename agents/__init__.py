@@ -1,5 +1,5 @@
 """
-Agent 模块 —— 7 个专业 Agent。
+Agent 模块 —— 7 个专业 Agent + DataUnderstander。
 """
 
 from .base import BaseAgent
@@ -10,6 +10,7 @@ from .eda import EDAAgent
 from .visualization import VisualizationAgent
 from .ml_agent import MLAgent
 from .reporter import ReporterAgent
+from .data_understander import DataUnderstanderAgent
 
 __all__ = [
     "BaseAgent",
@@ -20,4 +21,5 @@ __all__ = [
     "VisualizationAgent",
     "MLAgent",
     "ReporterAgent",
+    "DataUnderstanderAgent",
 ]

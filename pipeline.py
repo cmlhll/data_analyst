@@ -52,13 +52,15 @@ class AnalysisTask:
     def __init__(
         self,
         task_id: str,
-        file_path: str,
+        file_path: str = "",
         user_query: str = "请对这份数据进行全面的数据分析",
         output_dir: Optional[str] = None,
+        dataset_dir: str = "",
     ) -> None:
         self.task_id = task_id
-        self.file_path = os.path.abspath(file_path)
+        self.file_path = os.path.abspath(file_path) if file_path else ""
         self.user_query = user_query
+        self.dataset_dir = os.path.abspath(dataset_dir) if dataset_dir else ""
         self.output_dir = output_dir or os.path.join(
             _PROJECT_ROOT, ANALYSIS_RESULTS_DIR, task_id
         )
@@ -69,15 +71,17 @@ class AnalysisTask:
             "file_path": self.file_path,
             "user_query": self.user_query,
             "output_dir": self.output_dir,
+            "dataset_dir": self.dataset_dir,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "AnalysisTask":
         return cls(
             task_id=d["task_id"],
-            file_path=d["file_path"],
+            file_path=d.get("file_path", ""),
             user_query=d.get("query", d.get("user_query", "请对这份数据进行全面的数据分析")),
             output_dir=d.get("output_dir"),
+            dataset_dir=d.get("dataset_dir", ""),
         )
 
 
@@ -123,12 +127,21 @@ def _run_single_task(task_dict: dict) -> dict:
     try:
         from graph import run_analysis
 
-        # 执行分析
-        final_state = run_analysis(
-            file_path=task.file_path,
-            user_query=task.user_query,
-            thread_id=task.task_id,
-        )
+        # 检查是文件模式还是数据集模式
+        if task.dataset_dir:
+            # 数据集模式
+            final_state = run_analysis(
+                dataset_dir=task.dataset_dir,
+                user_query=task.user_query,
+                thread_id=task.task_id,
+            )
+        else:
+            # 文件模式
+            final_state = run_analysis(
+                file_path=task.file_path,
+                user_query=task.user_query,
+                thread_id=task.task_id,
+            )
 
         elapsed = time.monotonic() - start_time
         result["duration_s"] = round(elapsed, 1)
@@ -303,15 +316,24 @@ class PipelineScheduler:
 
 def _cmd_run(args: argparse.Namespace) -> None:
     """python pipeline.py run --task-id xxx --file xxx --query xxx"""
+    if not args.file and not args.dataset:
+        print("❌ 请指定 --file（文件模式）或 --dataset（数据集模式）")
+        sys.exit(1)
+
     task = AnalysisTask(
         task_id=args.task_id,
         file_path=args.file,
         user_query=args.query,
+        dataset_dir=args.dataset,
     )
     os.makedirs(task.output_dir, exist_ok=True)
 
-    print(f"📋 单任务模式: [{task.task_id}]")
-    print(f"   文件: {task.file_path}")
+    mode_str = "数据集模式" if args.dataset else "文件模式"
+    print(f"📋 单任务模式 ({mode_str}): [{task.task_id}]")
+    if args.file:
+        print(f"   文件: {task.file_path}")
+    if args.dataset:
+        print(f"   数据集: {task.dataset_dir}")
     print(f"   查询: {task.user_query}")
     print(f"   输出: {task.output_dir}")
     print()
@@ -431,7 +453,8 @@ tasks.json 示例:
     # run 子命令
     run_parser = subparsers.add_parser("run", help="单任务模式（适合多终端各跑一个）")
     run_parser.add_argument("--task-id", required=True, help="任务唯一标识")
-    run_parser.add_argument("--file", required=True, help="数据文件路径")
+    run_parser.add_argument("--file", default="", help="数据文件路径（文件模式）")
+    run_parser.add_argument("--dataset", default="", help="数据集目录路径（数据集模式，含metadata.md）")
     run_parser.add_argument("--query", default="请对这份数据进行全面的数据分析", help="分析需求描述")
     run_parser.add_argument("--output-dir", help="输出目录（可选）")
 

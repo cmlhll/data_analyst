@@ -92,3 +92,9 @@ class DataAnalysisState(TypedDict):
     # 自检
     inspection_log: list[dict]
     inspection_report: str
+
+    # 数据集模式
+    dataset_dir: str
+    metadata_content: str
+    data_tables: dict
+    mode: str  # 'file' or 'dataset'

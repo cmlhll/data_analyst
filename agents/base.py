@@ -197,7 +197,10 @@ class BaseAgent(ABC):
             }
 
     def _build_preamble(self, state: DataAnalysisState) -> str:
-        """构建代码前置 —— 导入常用库并加载数据。包含路径安全校验。"""
+        """构建代码前置 —— 导入常用库并加载数据。包含路径安全校验。
+
+        数据集模式下跳过硬编码的文件加载（由 DataUnderstander 处理）。
+        """
         preamble = """
 import pandas as pd
 import numpy as np
@@ -214,7 +217,30 @@ plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 sns.set_style("whitegrid")
 """
-        # 加载数据：优先从工作副本 (pickle)，fallback 到原始文件
+        mode = state.get("mode", "file")
+
+        # 数据集模式：data_understander 已经加载了数据到 pickle
+        # 从工作副本加载 df（如果存在）
+        if mode == "dataset":
+            sandbox_dir = config.SANDBOX_DIR
+            preamble += f"""
+import os as _os
+
+_working = _os.path.join(r"{sandbox_dir}", '_working_data.pkl')
+if _os.path.exists(_working):
+    try:
+        df = pd.read_pickle(_working)
+        print(f"✅ 从工作副本加载: {{df.shape[0]}} 行 × {{df.shape[1]}} 列")
+    except Exception:
+        _os.remove(_working)
+        raise
+else:
+    df = pd.DataFrame()
+    print("⚠️ 工作副本不存在，使用空 DataFrame")
+"""
+            return preamble.strip()
+
+        # 文件模式：加载数据：优先从工作副本 (pickle)，fallback 到原始文件
         raw_path = state.get("file_path")
         if raw_path:
             sandbox_dir = config.SANDBOX_DIR

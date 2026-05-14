@@ -1,0 +1,11 @@
+customer_id,name,city,age,segment
+C1,Alice,New York,34,Consumer
+C2,Bob,Los Angeles,28,Corporate
+C3,Charlie,Chicago,45,Consumer
+C4,Diana,Houston,31,Corporate
+C5,Eve,San Francisco,29,Consumer
+C6,Frank,New York,52,Corporate
+C7,Grace,Los Angeles,37,Consumer
+C8,Henry,Chicago,41,Corporate
+C9,Ivy,Houston,26,Consumer
+C10,Jack,San Francisco,33,Corporate
