@@ -7,32 +7,33 @@
 ## 架构
 
 ```
-┌────────────────────────────────────────────┐
-│                Supervisor                  │  ← 任务路由器 (LLM 决策)
-│                  (路由器)                    │
-└───────┬───────┬───────┬───────┬───────┬────┘
-        │       │       │       │       │
-   ┌────┐  ┌────┐  ┌────┐  ┌────┐  ┌────┐  ┌────────┐
-   │Loader│ │Cleaner│ │EDA │  │Viz │  │ ML │  │Reporter│
-   │数据加载│ │数据清洗│ │探索│  │可视化│  │建模│  │ 报告   │
-   └────┘  └────┘  └────┘  └────┘  └────┘  └────────┘
-        │       │       │       │       │       │
-        └───────┴───────┴───────┴───────┴───────┘
-                        │
-                 回到 Supervisor（循环决策）
+|┌──────────────────────────────────────────────────────┐
+|│                   Supervisor                         │  ← 任务路由器 (LLM 决策)
+|│                     (路由器)                           │
+|└──────┬──────┬──────┬──────┬──────┬──────┬───────────┘
+|       │      │      │      │      │      │
+|  ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌──────────┐
+|  │Under│ │Loader│ │Clean│ │EDA │ │Viz │ │ ML │ │ Reporter │
+|  │stand│ │数据加载│ │数据清洗│ │探索│ │可视化│ │建模│ │  报告    │
+|  │ 理解│ └────┘ └────┘ └────┘ └────┘ └────┘ └──────────┘
+|  └────┘      │      │      │      │      │
+|       ↑      └──────┴──────┴──────┴──────┘
+|  数据集模式                │
+|  专用入口           回到 Supervisor（循环决策）
 ```
 
-### 7 个专业 Agent
+### 8 个专业 Agent
 
-| Agent | 职责 |
-|-------|------|
-| **Supervisor** | 读取分析进度，LLM 决策下一个执行的专业 Agent |
-| **DataLoader** | 加载 CSV/Excel/JSON/Parquet/TSV，生成数据摘要 |
-| **DataCleaner** | 缺失值处理、异常值检测、类型转换、去重 |
-| **EDA** | 描述统计、分布分析、相关性矩阵、洞察提取 |
-| **Visualization** | matplotlib/seaborn 图表：柱状图、散点图、热力图、箱线图等 |
-| **ML Agent** | 特征工程、模型训练（分类/回归/聚类）、交叉验证与评估 |
-| **Reporter** | 汇总所有分析结果，生成结构化 Markdown 报告 |
+| Agent | 模式 | 职责 |
+|-------|------|------|
+| **Supervisor** | 全模式 | 读取分析进度，LLM 决策下一个执行的专业 Agent |
+| **DataUnderstander** 🆕 | 数据集模式 | 读取 metadata.md，理解表结构和关系，生成代码加载关联数据到 df |
+| **DataLoader** | 文件模式 | 加载 CSV/Excel/JSON/Parquet/TSV 单文件，生成数据摘要 |
+| **DataCleaner** | 全模式 | 缺失值处理、异常值检测、类型转换、去重 |
+| **EDA** | 全模式 | 描述统计、分布分析、相关性矩阵、洞察提取 |
+| **Visualization** | 全模式 | matplotlib/seaborn 图表：柱状图、散点图、热力图、箱线图等 |
+| **ML Agent** | 全模式 | 特征工程、模型训练（分类/回归/聚类）、交叉验证与评估 |
+| **Reporter** | 全模式 | 汇总所有分析结果，生成结构化 Markdown 报告 |
 
 ---
 
@@ -61,15 +62,82 @@ export DATA_ANALYST_TEMPERATURE="0.1"
 ```bash
 source venv/bin/activate
 
+# ── 文件模式（单个文件）──
 # 基础分析
 python main.py data/sales.csv
 
 # 指定分析需求
 python main.py data/iris.csv --query "分析品种分类特征，训练分类模型并可视化"
 
+# ── 数据集模式（多表目录）──
+# 数据集模式自动检测：给目录路径即可进入数据集模式
+python main.py data/sales --query "分析各城市客户消费分布和热门产品"
+
 # 多轮对话（同一会话续问）
 python main.py data/orders.csv --thread-id session-001
 ```
+
+### 数据集模式详解
+
+数据集模式适用于**多表关联场景**（如电商订单、客户、产品多个文件）。
+
+#### 数据集结构要求
+
+每个数据集是一个独立目录，包含：
+- `metadata.md` — **必须**，描述所有表的字段、类型和外键关系
+- CSV 数据文件（每表一个）
+
+```
+data/sales/
+├── metadata.md                 # 表结构描述
+├── sales_customers.csv         # 客户表
+├── sales_products.csv          # 产品表
+└── sales_orders.csv            # 订单明细表
+```
+
+#### metadata.md 格式
+
+```markdown
+# 数据库：销售数据集
+
+## 1. customers (客户信息表)
+- 描述：记录客户基本信息和分群
+- 字段：
+  - customer_id (PK, string): 客户唯一标识
+  - city (string): 客户所在城市
+  - segment (string): 客户分群
+
+## 2. orders (订单明细表)
+- 描述：每笔订单的详细信息
+- 字段：
+  - order_id (PK, string): 订单唯一标识
+  - customer_id (FK -> customers.customer_id): 客户ID
+  - revenue (float): 订单金额
+```
+
+#### 工作原理
+
+```
+用户: python main.py data/sales --query "分析客户分布"
+                                        │
+                          ┌─────────────┴─────────────┐
+                          │  DataUnderstander Agent    │
+                          │ ① 读取 metadata.md         │
+                          │ ② 分析用户问题 → 确定需      │
+                          │    要用哪些表/字段           │
+                          │ ③ 生成加载代码               │
+                          │ ④ 执行代码 → 合并成 df      │
+                          └─────────────┬─────────────┘
+                                        │ df 传递给后续 Agent
+                          ┌─────────────┴─────────────┐
+                          │     Supervisor 路由         │
+                          │ → Loader/Cleaner/EDA/Viz.. │
+                          └───────────────────────────┘
+```
+
+- **DataUnderstander Agent** 是数据集模式的唯一入口，完成后将 `df` 持久化到 pickle
+- 后续的 Loader/Cleaner/EDA 等 Agent 自动从 pickle 加载，无需重新读取文件
+- **文件模式不受影响**，仍然直接从 Supervisor 路由到 DataLoader
 
 ---
 
@@ -98,11 +166,14 @@ cat > tasks.json << 'EOF'
 ]
 EOF
 
+# 也支持数据集模式（使用 --dataset 替代 --file）
+python pipeline.py run --task-id sales_analysis --dataset data/sales --query "分析各城市客户分布和热门产品"
+
 # 并发执行（--concurrent 指定并行数）
 python pipeline.py tasks.json --concurrent 3
 
-# 或直接内联传 JSON
-python pipeline.py --inline '[{"task_id":"demo","file":"data/demo.csv","query":"分析"}]'
+# 或直接内联传 JSON（支持 file 和 dataset_dir 混用）
+python pipeline.py --inline '[{"task_id":"f1","file":"data/demo.csv","query":"分析"},{"task_id":"d1","dataset_dir":"data/sales","query":"分析销售趋势"}]'
 ```
 
 ### 查看历史结果
@@ -196,12 +267,19 @@ data_analyst/
 ├── agents/
 │   ├── base.py             # Agent 基类（LLM 调用 + 代码执行 + 自检注入）
 │   ├── supervisor.py       # 任务路由器
-│   ├── data_loader.py      # 数据加载
+│   ├── data_understander.py # 🆕 数据集模式入口（读取元数据 → 生成加载代码）
+│   ├── data_loader.py      # 数据加载（文件模式）
 │   ├── data_cleaner.py     # 数据清洗
 │   ├── eda.py              # 探索性分析
 │   ├── visualization.py    # 数据可视化
 │   ├── ml_agent.py         # 机器学习
 │   └── reporter.py         # 报告生成
+├── data/
+│   └── sales/              # 🆕 示例数据集（含 metadata.md + 多表 CSV）
+│       ├── metadata.md
+│       ├── sales_customers.csv
+│       ├── sales_products.csv
+│       └── sales_orders.csv
 ├── tools/
 │   ├── code_executor.py    # 代码沙箱（子进程 + AST 安全校验 + 超时）
 │   └── file_handler.py     # 文件上传/解析/校验
